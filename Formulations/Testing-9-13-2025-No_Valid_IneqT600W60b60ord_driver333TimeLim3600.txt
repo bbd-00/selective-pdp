@@ -1,0 +1,3 @@
+Num.req. Num.com. Num.occ. Runtime(sec) ObjValue GAP(%) SL SL_occ comdriverutilisation occriverutilisation Num.Constr Num.Vars
+Num.req. Num.com. Num.occ. Runtime(sec) ObjValue GAP(%) SL SL_occ comdriverutilisation occriverutilisation Num.Constr Num.Vars
+Num.req. Num.com. Num.occ. Runtime(sec) ObjValue GAP(%) SL SL_occ comdriverutilisation occriverutilisation Num.Constr Num.Vars

@@ -253,6 +253,7 @@ for nbr_req in range(5,55,5): #40,80,40 # 5,80,10
                     e = e_first_stage.copy()
                     l = l_first_stage.copy()
 
+
                     # Append the location of occasional drivers next
                     # The occasional drivers locations are chosen randomly
                     for i in occ_driver_set:
