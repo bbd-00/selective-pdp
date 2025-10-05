@@ -97,3 +97,15 @@ Arc_Slection_TW2_Valid_Ineq 30 4 2 0.6573858737945557 100.00662374693076 8.52651
 Arc_Slection_TW2_Valid_Ineq 30 6 0 6.0148069858551025 148.0699894610642 -2.842170943040401e-14 0.4666666666666667 0.0 1.0 0.0 [1.0, 3.0, 3.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 56366 5209 3600.0, Username(user-defined), LicenseID2379139
 Arc_Slection_TW2_Valid_Ineq 35 2 4 1.4542142868041992 96.31863576002831 1.4210854715202004e-14 0.4 0.02857142857142857 1.0 0.25 [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] 76173 6769 3600.0, Username(user-defined), LicenseID2379139
 Arc_Slection_TW2_Valid_Ineq 35 4 2 2.649072217941284 133.21146479246323 0.0 0.45714285714285713 0.02857142857142857 1.0 0.5 [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 76149 6769 3600.0, Username(user-defined), LicenseID2379139
+Num.req. Num.com. Num.occ. Runtime(sec) ObjValue GAP(%) SL SL_occ comdriverutilisation occriverutilisation Num.Constr Num.Vars
+Num.req. Num.com. Num.occ. Runtime(sec) ObjValue GAP(%) SL SL_occ comdriverutilisation occriverutilisation Num.Constr Num.Vars
+Num.req. Num.com. Num.occ. Runtime(sec) ObjValue GAP(%) SL SL_occ comdriverutilisation occriverutilisation Num.Constr Num.Vars
+Arc_Slection_TW2_Valid_Ineq 5 2 4 0.0014286041259765625 -1.6 0.0 0.0 0.0 0.0 0.0 [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] 2089 409 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 5 4 2 0.001311492919921875 -3.2 0.0 0.0 0.0 0.0 0.0 [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 2091 409 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 5 6 0 0.0008069992065429688 -4.8 0.0 0.0 0.0 0.0 0.0 [1.0, 3.0, 3.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 2093 409 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 10 2 4 0.00910639762878418 34.37820384113021 0.0 0.3 0.0 1.0 0.0 [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] 7051 969 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 10 4 2 0.009216928482055664 32.77820384113021 0.0 0.3 0.0 0.5 0.0 [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 7053 969 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 10 6 0 0.024863052368164062 35.64268304981034 1.4210854715202004e-14 0.4 0.0 0.5 0.0 [1.0, 3.0, 3.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 7031 969 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 15 2 4 0.02246432304382324 48.75093387300969 1.4210854715202004e-14 0.26666666666666666 0.0 1.0 0.0 [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] 14981 1729 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 15 4 2 0.02897505760192871 70.45191565365599 1.4210854715202004e-14 0.4 0.0 1.0 0.0 [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 14970 1729 3600.0, Username(user-defined), LicenseID2379139
+Arc_Slection_TW2_Valid_Ineq 15 6 0 0.04636564254760742 73.31639486233613 1.4210854715202004e-14 0.4666666666666667 0.0 0.8333333333333334 0.0 [1.0, 3.0, 3.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0] 14948 1729 3600.0, Username(user-defined), LicenseID2379139

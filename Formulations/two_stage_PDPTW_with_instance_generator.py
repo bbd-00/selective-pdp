@@ -829,58 +829,78 @@ for nbr_req in range(5,55,5): #40,80,40 # 5,80,10
 
                     m.optimize()
 
-                    #NOTE: This is from ChatGPT and has not been thoroughly checked
                     if m.status == GRB.OPTIMAL:
-                        print("\n=== Optimal Objective Value ===")
-                        print(round(m.objVal, 4))
-                        print("\n=== Courier Schedules ===")
+                    # #NOTE: This is from ChatGPT and has not been thoroughly checked -- turned out to be incorrect
+                    #     print("\n=== Optimal Objective Value ===")
+                    #     print(round(m.objVal, 4))
+                    #     print("\n=== Courier Schedules ===")
 
-                        for k in driver_set:
-                            # start time at driver's depot node
-                            start_time = c[k].X if c.get(k) else 0
+                    #     for k in driver_set:
+                    #         # start time at driver's depot node
+                    #         start_time = c[k].X if c.get(k) else 0
 
-                            # collect visited nodes safely
-                            visited_nodes = [i for i in all_points_set if z.get((i,k)) and z[i,k].X > 0.5]
+                    #         # collect visited nodes safely
+                    #         visited_nodes = [i for i in all_points_set if z.get((i,k)) and z[i,k].X > 0.5]
 
-                            if visited_nodes:
-                                end_time = max(c[i].X for i in visited_nodes if c.get(i))
-                            else:
-                                end_time = start_time
+                    #         if visited_nodes:
+                    #             end_time = max(c[i].X for i in visited_nodes if c.get(i))
+                    #         else:
+                    #             end_time = start_time
 
-                            driver_type = "Committed" if k in com_driver_set else "Occasional"
-                            print(f"\nCourier {k} ({driver_type}):")
-                            print(f"  Start time: {start_time:.2f} (Earliest {e[k]:.2f})")
-                            print(f"  End time:   {end_time:.2f} (Latest {l[k]:.2f})")
+                    #         driver_type = "Committed" if k in com_driver_set else "Occasional"
+                    #         print(f"\nCourier {k} ({driver_type}):")
+                    #         print(f"  Start time: {start_time:.2f} (Earliest {e[k]:.2f})")
+                    #         print(f"  End time:   {end_time:.2f} (Latest {l[k]:.2f})")
 
-                            # list served requests
-                            served = [i for i in pickup_set if z.get((i,k)) and z[i,k].X > 0.5]
-                            if not served:
-                                print("  No requests assigned")
-                                continue
+                    #         # list served requests
+                    #         served = [i for i in pickup_set if z.get((i,k)) and z[i,k].X > 0.5]
+                    #         if not served:
+                    #             print("  No requests assigned")
+                    #             continue
 
-                            print("  Served requests:")
-                            for i in served:
-                                pickup_time   = c[i].X if c.get(i) else 0
-                                delivery_time = c[i+num_pickups].X if c.get(i+num_pickups) else 0
-                                req_id = i - num_drivers + 1  # shift index to match request numbering
-                                print(f"    Request {req_id}: "
-                                    f"Pickup at {pickup_time:.2f} (TW [{e[i]:.2f},{l[i]:.2f}]), "
-                                    f"Delivery at {delivery_time:.2f} (TW [{e[i+num_pickups]:.2f},{l[i+num_pickups]:.2f}])")
+                    #         print("  Served requests:")
+                    #         for i in served:
+                    #             pickup_time   = c[i].X if c.get(i) else 0
+                    #             delivery_time = c[i+num_pickups].X if c.get(i+num_pickups) else 0
+                    #             req_id = i - num_drivers + 1  # shift index to match request numbering
+                    #             print(f"    Request {req_id}: "
+                    #                 f"Pickup at {pickup_time:.2f} (TW [{e[i]:.2f},{l[i]:.2f}]), "
+                    #                 f"Delivery at {delivery_time:.2f} (TW [{e[i+num_pickups]:.2f},{l[i+num_pickups]:.2f}])")
 
-                            # reconstruct route
-                            route = []
-                            current = k
-                            while True:
-                                next_nodes = [j for j in all_points_set if x.get((current,j)) and x[current,j].X > 0.5]
-                                if not next_nodes:
-                                    break
-                                nxt = next_nodes[0]
-                                route.append(nxt)
-                                if nxt in dest_set:
-                                    break
-                                current = nxt
+                    #         # reconstruct route
+                    #         route = []
+                    #         current = k
+                    #         while True:
+                    #             next_nodes = [j for j in all_points_set if x.get((current,j)) and x[current,j].X > 0.5]
+                    #             if not next_nodes:
+                    #                 break
+                    #             nxt = next_nodes[0]
+                    #             route.append(nxt)
+                    #             if nxt in dest_set:
+                    #                 break
+                    #             current = nxt
 
-                            print("  Route: " + " -> ".join(str(node) for node in [k] + route))
+                    #         print("  Route: " + " -> ".join(str(node) for node in [k] + route))
+
+                        for i in driver_set:
+                            c_sol_node = m.getVarByName("c["+str(i)+"]")
+                            print(f"driver l0 {annot[i]} E,L:{e[i]:.2f},{l[i]:.2f}")
+                            #v_sol = m.getVarByName("v["+str(i)+"]")                                                
+                            node = i
+                            not_ended = True
+                            while not_ended:
+                                for j in pickup_and_dest_set:
+                                    x_sol = m.getVarByName("x["+str(node)+","+str(j)+"]")
+                                    #print(f'x[{i},{j}]={x_sol.X}')                            
+                                    if abs(x_sol.X - 1) <= 10e-4:
+                                        c_sol_j = m.getVarByName("c["+str(j)+"]")   
+                                        print(f"node:{node} label {annot[node]} at {c_sol_node.X:.2f} E,L ({e[node]:.2f},{l[node]:.2f})-> node:{j} label {annot[j]} at {c_sol_j.X:.2f} E,L ({e[j]:.2f},{l[j]:.2f}) distance[{node,j}] {distance[node,j]:.2f}")
+                                        node = j
+                                        c_sol_node = c_sol_j
+                                        break
+                                    elif j == pickup_and_dest_set[-1]: # this is last node 
+                                        not_ended = False
+                                    
 
                             print(rev_order_obj.getValue())
                             print(c_com_hour_obj.getValue())
