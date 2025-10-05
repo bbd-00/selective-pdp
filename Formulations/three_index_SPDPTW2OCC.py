@@ -203,3 +203,257 @@ if m.status == GRB.OPTIMAL:
 elif m.status == GRB.INFEASIBLE:
     m.computeIIS()
     m.write("infeasible.ilp")
+
+
+# ------------------------------------------------------------
+# SECOND MODEL: Extension of Furtado's Two-Index Formulation
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# DUPLICATE DEPOTS FOR EACH COURIER
+# ------------------------------------------------------------
+
+print("\n\n=== Building Two-Index Model (SPDP-TW-2CC) ===")
+
+m2 = gp.Model("SPDP_TW_2CC")
+
+K = [x + 1 for x in K]
+KC = list(range(1, num_comm_drivers+1))
+KO = list(range(num_comm_drivers+1, num_comm_drivers+num_occ_drivers+1))
+
+# ------------------------------------------------------------
+# 1. Duplicate depots for each courier
+# ------------------------------------------------------------
+O = [f"o{k}" for k in K]  # origin depot for each courier
+F = [f"f{k}" for k in K]  # end depot for each courier
+V2 = O + P + D + F
+
+# Arc sets
+A1_2 = [(o, j) for o in O for j in P]                       # origin depots -> pickups
+A2_2 = [(i, j) for i in P + D for j in P + D if i != j]     # between pickups/deliveries
+A3_2 = [(i, f) for f in F for i in D]  + [(o,f) for o in O for f in F]        # deliveries -> end depots
+A2CC = A1_2 + A2_2 + A3_2
+
+# ------------------------------------------------------------
+# 2. Distances
+# ------------------------------------------------------------
+coords2 = {}
+for req in instance["requests"]:
+    pid = req["id"]
+    coords2[pid] = req["pickup"]
+    coords2[pid + num_requests] = req["dest"]
+
+for k, (ox, oy) in enumerate(ok):
+    coords2[f"o{k+1}"] = (ox, oy)
+    coords2[f"f{k+1}"] = (ox, oy)
+
+dij2_A2 = {(i,j): math.dist(coords2[i], coords2[j]) for (i,j) in A1_2+A2_2}
+dij2_A3 = {(i,j): 0 for (i,j) in A3_2}
+dij2 = {**dij2_A2, **dij2_A3}
+tij2 = dij2.copy()
+
+for o in O:
+    si[o] = 0
+for f in F:
+    si[f] = 0
+
+# ------------------------------------------------------------
+# 3. Variables
+# ------------------------------------------------------------
+x2 = m2.addVars(A2CC, vtype=GRB.BINARY, name="x")
+y2 = m2.addVars(V2, K, vtype=GRB.BINARY, name="y")
+T2 = m2.addVars(V2, vtype=GRB.CONTINUOUS, lb=0, name="T")
+v2 = m2.addVars(V2, vtype=GRB.CONTINUOUS, lb=0, name="v")
+w2 = m2.addVars(A2CC, vtype=GRB.CONTINUOUS, lb=0, name="w")
+
+# ------------------------------------------------------------
+# 4. Objective (eq. 16)
+# ------------------------------------------------------------
+obj2 = gp.quicksum(p[i] * gp.quicksum(y2[i, k] for k in K) for i in P)
+obj2 -= gp.quicksum((wC * (Lk[k-1] - Ek[k-1])) for k in KC)
+obj2 -= gp.quicksum((cO * gp.quicksum(y2[i, k] for i in P)) for k in KO)
+obj2 -= gp.quicksum(w2[i, j] for (i, j) in A2CC)
+m2.setObjective(obj2, GRB.MAXIMIZE)
+
+# ------------------------------------------------------------
+# 5. Constraints
+# ------------------------------------------------------------
+
+# (17) Each pickup served at most once
+m2.addConstrs(gp.quicksum(x2[i, j] for j in V2 if (i, j) in A2CC) <= 1 for i in P)
+
+# (18) Flow conservation for pickups/deliveries
+m2.addConstrs(
+    gp.quicksum(x2[j, i] for j in V2 if (j, i) in A2CC) -
+    gp.quicksum(x2[i, j] for j in V2 if (i, j) in A2CC) == 0
+    for i in P + D
+)
+
+# (19) Depart from each courier’s own origin
+m2.addConstrs(
+    gp.quicksum(x2[o, j] for j in V2 if (o, j) in A2CC) == 1
+    for o in O
+)
+
+# (20) Return to each courier’s own finish depot
+m2.addConstrs(
+    gp.quicksum(x2[j, f] for j in V2 if (j, f) in A2CC) == 1
+    for f in F
+)
+
+# (21) Time propagation along arcs
+m2.addConstrs(
+    T2[j] >= T2[i] + tij2[i, j] + si[j] - H * (1 - x2[i, j])
+    for (i, j) in A2CC
+)
+
+# (22) Node time windows
+m2.addConstrs(ei[i] <= T2[i] for i in P + D)
+m2.addConstrs(T2[i] <= li[i] for i in P + D)
+
+# (23) Precedence
+m2.addConstrs(T2[i] + tij[i,i+n] + si[i+n] <= T2[i+n] for i in P)
+
+# (24–25) Courier time constraints
+m2.addConstrs(Ek[k-1] <= T2[f"o{k}"] for k in K)
+m2.addConstrs(T2[f"f{k}"] <= Lk[k-1] for k in K)
+
+# (26–27) v-index propagation
+m2.addConstrs(v2[j] >= v2[i] - len(K) * (1 - x2[i, j]) for (i, j) in A2_2+A3_2)
+m2.addConstrs(v2[j] <= v2[i] + len(K) * (1 - x2[i, j]) for (i, j) in A2_2+A3_2)
+
+# (28–29) v-index from origin depots
+m2.addConstrs(v2[j] >= k * x2[f"o{k}",j] for k in K for j in P+[f"d{k}"] if (f"o{k}", j) in A2CC)
+m2.addConstrs(v2[j] <= k * x2[f"o{k}",j] + len(K) * (1 - x2[f"o{k}", j]) for k in K for j in P+[f"d{k}"] if (f"o{k}", j) in A2CC)
+
+# (30) Pickup and delivery same courier
+m2.addConstrs(v2[i] == v2[i + n] for i in P)
+
+# (31) Linking v with y
+m2.addConstrs(v2[j] == gp.quicksum(k * y2[j, k] for k in K) for j in V2)
+
+# (32) Linking x with y
+m2.addConstrs(gp.quicksum(y2[i, k] for k in K) == gp.quicksum(x2[i,j] for j in V2 if (i,j) in A2CC) for i in O+P+D)
+
+# (33)-(34) Initital and final conditions
+m2.addConstrs(v2[f"o{k}"] == k for k in K)
+m2.addConstrs(v2[f"f{k}"] == k for k in K)
+
+# (35) w_ij cost factors
+def delta_cost(i, j, k):
+    delta = 0
+
+    if k in KC:
+        if (i, j) in A1_2 or (i, j) in A2_2:
+            delta = deltaC
+
+    elif k in KO:
+        if i in P and j in D:
+            delta = deltaO
+
+    return delta
+
+m2.addConstrs(
+    (w2[i, j] >= delta_cost(i, j, k) * dij2[i, j]
+     - 1000 * (3 - y2[i, k] - y2[j, k] - x2[i,j]))
+    for k in K for (i, j) in A1_2+A2_2
+)
+
+# m2.addConstrs(
+#     (w2[i, j] <= delta_cost(i, j, k) * dij2[i, j]
+#      + 1000 * (2 - y2[i, k] - y2[j, k]))
+#     for k in K for (i, j) in A2CC
+# )
+
+# ------------------------------------------------------------
+# 6. Solve
+# ------------------------------------------------------------
+m2.write("model.lp")
+print("\nSolving Extended Model...")
+m2.optimize()
+
+if m2.status == GRB.OPTIMAL:
+    print("\n=== Extended Model Objective ===")
+    print(round(m2.objVal, 4))
+
+    print("\n=== Courier Schedules ===")
+
+    for k in K:
+        start_time = T2[f"o{k}"].X
+        end_time   = T2[f"f{k}"].X
+
+        print(f"\nCourier {k}:")
+        print(f"  Start time: {start_time:.2f}  (Earliest allowed {Ek[k-1]:.2f})")
+        print(f"  End time:   {end_time:.2f}  (Latest allowed {Lk[k-1]:.2f})")
+
+        # list served pickups
+        served = [i for i in P if y2[i,k].X > 0.5]
+        if not served:
+            print("  No requests assigned")
+            continue
+
+        print("  Served requests:")
+        for i in served:
+            pickup_time   = T2[i].X
+            delivery_time = T2[i+n].X
+            print(f"    Request {i}: "
+                    f"Pickup at {pickup_time:.2f} (TW [{ei[i]:.2f},{li[i]:.2f}]), "
+                    f"Delivery at {delivery_time:.2f} (TW [{ei[i+n]:.2f},{li[i+n]:.2f}])")
+
+        # show route arcs chosen
+        route = []
+        current = f"o{k}"
+        while True:
+            next_nodes = [j for j in V2 if (current,j) in A2CC and x2[current,j].X > 0.5]
+            if not next_nodes:
+                break
+            nxt = next_nodes[0]
+            route.append(nxt)
+            if nxt == f"f{k}":
+                break
+            current = nxt
+
+        print(f"  Route: 0 -> " + " -> ".join(str(node) for node in route))
+
+    # print("X")
+    # for (i,j) in A2CC:
+    #     if x2[i,j].X > 0.2:
+    #         print(i, j, x2[i,j].X)
+
+    # print("Y")
+    # for i in P:
+    #     for k in K:
+    #         if y2[i,k].X > 0.5:
+    #             print(i, k, y2[i,k].X)
+
+    # print("V")
+    # for i in P+D:
+    #     print(i, v2[i])
+
+    # print("T2")
+    # for i in V2:
+    #     print(i, T2[i])
+
+    # # Loop through all keys in w2
+    # for (i, j), value in w2.items():
+    #     expected = dij2.get((i, j))
+    #     if expected is None:
+    #         print(f"⚠️ Missing dij2[{i},{j}]")
+    #         continue
+
+    #     expected_val = expected * 0.2
+    #     is_positive = value.X > 0
+    #     if is_positive:
+    #         is_same = abs(value.X - expected_val) < 1e-9  # float-safe comparison
+
+    #         print(f"w2[{i},{j}] = {value.X:.3f} | positive={is_positive} | "
+    #             f"expected={expected_val:.3f} | match={is_same}")
+
+    # print(gp.quicksum(p[i] * gp.quicksum(y2[i, k] for k in K) for i in P).getValue())
+    # print(gp.quicksum((wC * (Lk[k-1] - Ek[k-1])) for k in KC).getValue())
+    # print(gp.quicksum((cO * gp.quicksum(y2[i, k] for i in P)) for k in KO).getValue())
+    # print(gp.quicksum(w2[i, j] for (i, j) in A2CC).getValue())
+
+elif m2.status == GRB.INFEASIBLE:
+    m2.computeIIS()
+    m2.write("infeasible.ilp")
