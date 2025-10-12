@@ -20,8 +20,8 @@ num_requests = len(instance["requests"])
 # Node indexing
 P = list(range(1, num_requests+1))
 D = [i+num_requests for i in P]
-KC = list(range(0, num_comm_drivers))
-KO = list(range(num_comm_drivers, num_comm_drivers+num_occ_drivers))
+KC = list(range(1, num_comm_drivers+1))
+KO = list(range(num_comm_drivers+1, num_comm_drivers+num_occ_drivers+1))
 n = len(P)
 V = [0] + P + D + [2*n+1]
 K = KC + KO
@@ -47,7 +47,7 @@ ok = [d["location"] for d in instance["committed"]] + \
 dij_A2 = {(i,j): math.dist(coords[i], coords[j]) for (i,j) in A2}
 dij_A3 = {(i,j): 0 for (i,j) in A3}
 dij = {**dij_A2, **dij_A3}
-dijk = {(i,j,k): math.dist(ok[k], coords[j]) for (i,j) in A1 for k in K}
+dijk = {(i,j,k): math.dist(ok[k-1], coords[j]) for (i,j) in A1 for k in K}
 tij = dij.copy()
 tijk = dijk.copy()
 
@@ -148,10 +148,10 @@ m.addConstrs(T[i,k] + tij[i,i+n] + si[i+n] <= T[i+n,k] for i in P for k in K)
 m.addConstrs(y[i,k] == gp.quicksum(x[i,j,k] for j in V if (i,j) in A) for i in P for k in K)
 
 # (11) Earliest departure
-m.addConstrs(Ek[k] <= T[0,k] for k in K)
+m.addConstrs(Ek[k-1] <= T[0,k] for k in K)
 
 # (12) Latest return
-m.addConstrs(T[2*n+1,k] <= Lk[k] for k in K)
+m.addConstrs(T[2*n+1,k] <= Lk[k-1] for k in K)
 
 # ------------------------------------------------------------
 # SOLVE
@@ -168,8 +168,8 @@ if m.status == GRB.OPTIMAL:
         end_time   = T[2*n+1,k].X
 
         print(f"\nCourier {k}:")
-        print(f"  Start time: {start_time:.2f}  (Earliest allowed {Ek[k]:.2f})")
-        print(f"  End time:   {end_time:.2f}  (Latest allowed {Lk[k]:.2f})")
+        print(f"  Start time: {start_time:.2f}  (Earliest allowed {Ek[k-1]:.2f})")
+        print(f"  End time:   {end_time:.2f}  (Latest allowed {Lk[k-1]:.2f})")
 
         # list served pickups
         served = [i for i in P if y[i,k].X > 0.5]
@@ -217,9 +217,9 @@ print("\n\n=== Building Two-Index Model (SPDP-TW-2CC) ===")
 
 m2 = gp.Model("SPDP_TW_2CC")
 
-K = [x + 1 for x in K]
-KC = list(range(1, num_comm_drivers+1))
-KO = list(range(num_comm_drivers+1, num_comm_drivers+num_occ_drivers+1))
+# K = [x + 1 for x in K]
+# KC = list(range(1, num_comm_drivers+1))
+# KO = list(range(num_comm_drivers+1, num_comm_drivers+num_occ_drivers+1))
 
 # ------------------------------------------------------------
 # 1. Duplicate depots for each courier
