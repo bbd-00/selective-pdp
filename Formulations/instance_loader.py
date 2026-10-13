@@ -24,8 +24,8 @@ def load_instance_from_txt(filename):
     committed = []
     for _ in range(nC):
         parts = lines[i].split(); i += 1
-        cid, x, y, e, l = int(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-        committed.append(dict(id=cid, location=(x,y), e=e, l=l))
+        cid, x, y, e, l, cap = int(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
+        committed.append(dict(id=cid, location=(x,y), e=e, l=l, cap=cap))
     instance["committed"] = committed
 
     # OCCASIONAL DRIVERS
@@ -34,8 +34,8 @@ def load_instance_from_txt(filename):
     occasional = []
     for _ in range(nO):
         parts = lines[i].split(); i += 1
-        oid, x, y, e, l = int(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-        occasional.append(dict(id=oid, location=(x,y), e=e, l=l))
+        oid, x, y, e, l, cap = int(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])
+        occasional.append(dict(id=oid, location=(x,y), e=e, l=l, cap=cap))
     instance["occasional"] = occasional
 
     # REQUESTS
@@ -47,11 +47,11 @@ def load_instance_from_txt(filename):
         rid = int(parts[0])
         px, py, dx, dy = map(float, parts[1:5])
         dp, dd = int(parts[5]), int(parts[6])
-        ep, lp, ed, ld = map(float, parts[7:11])
+        ep, lp, ed, ld, dem = map(float, parts[7:12])
         requests.append(dict(id=rid,
                              pickup=(px,py), dest=(dx,dy),
                              delay_p=dp, delay_d=dd,
                              e_pickup=ep, l_pickup=lp,
-                             e_dest=ed, l_dest=ld))
+                             e_dest=ed, l_dest=ld, l_dem=dem))
     instance["requests"] = requests
     return instance

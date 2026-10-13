@@ -94,7 +94,7 @@ obj -= gp.quicksum(
 
 obj -= gp.quicksum(
     (cO * gp.quicksum(y[i,k] for i in P) +
-     deltaO * gp.quicksum(dij[i,j]*x[i,j,k] for (i,j) in A2 if i in P and j in D))
+     deltaO * gp.quicksum(dij[i,j]*x[i,j,k] for (i,j) in A2))
     for k in KO
 )
 

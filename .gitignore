@@ -1,0 +1,5 @@
+# Claude Code agent worktrees
+.claude/worktrees/
+
+# Python bytecode
+__pycache__/
