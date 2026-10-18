@@ -1,19 +1,24 @@
 # bnp_pricing_comparison.py
 #
-# Compares Branch-and-Price pricing solvers (and optionally the exact MIP) on the
-# InstanceswithDemand sweep: REQ = 10, 20, ..., MAX_REQ and CDR ∈ {0, 2, ..., 10},
-# ODR = 10 − CDR.  Methods are defined in the METHODS registry below — sheets,
-# headers, and comparison columns are generated from it.
+# Compares Branch-and-Price pricing solvers (and optionally the exact MIP) on every
+# instance file in INSTANCE_DIR or its subfolders whose name contains _REQ{n}_CDR{c}_ODR{o}
+# with n ≤ MAX_REQ, ordered by subfolder, then REQ, CDR and file name.  The instance_file
+# column shows each path relative to INSTANCE_DIR.  Methods are defined in the METHODS
+# registry below — sheets, headers, and comparison columns are generated from it.
 #
-# Output: bnp_pricing_comparison_{cgall|cgfirst}_{modes}.xlsx, where {modes} lists the
-# MIP-heuristic settings run, e.g. "mip", "nomip" or "mip_nomip".
+# Output: bnp_pricing_comparison_{dataset}_{cgall|cgfirst}_{modes}.xlsx, where {dataset} is
+# the last folder of INSTANCE_DIR and {modes} lists the MIP-heuristic settings run,
+# e.g. "mip", "nomip" or "mip_nomip".
 #   Sheet "Exact"        — per-instance exact MIP results (only if RUN_EXACT)
 #   Sheet "<MethodName>" — one detail sheet per configured method
 #   Sheet "Comparison"   — all methods side-by-side per instance, plus pairwise columns:
 #                          every method vs the first (reference) method, and every method
 #                          vs its own "baseline" (e.g. BnP_GS_nomip vs BnP_GS_mip)
+#   Sheet "Solution"     — statistics of each method's final solution (see solution_stats.py),
+#                          one row per instance and method
 
 import os
+import re
 import sys
 
 from openpyxl import Workbook
@@ -26,12 +31,15 @@ sys.path.insert(0, _REPO_ROOT)   # solve_exact_mip, instance_loader
 sys.path.insert(0, _HERE)        # branch_and_price and its pricing solvers
 
 from branch_and_price import solve_instance_bnp
+from instance_loader import load_instance_from_txt
+from solution_stats import STAT_KEYS, solution_statistics
 from solve_exact_mip import solve_exact_mip
 
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
-MAX_REQ           = 100              # largest REQ size to include (10, 20, ..., MAX_REQ)
-SEED              = 0               # SS index used when building instance filenames
+INSTANCE_DIR      = "UpdatedInstances"  # folder relative to the repo root, e.g.
+                                           # "UpdatedInstances/converted_sun_120_rev"
+MAX_REQ           = 100              # largest REQ size to include
 RUN_EXACT         = False            # False: skip the exact MIP (two-way pricing comparison)
 EXACT_TIME_LIMIT  = 3600            # seconds for the exact MIP
 TIME_LIMIT        = 3600            # seconds per B&P run
@@ -85,6 +93,8 @@ _BNP_EXTRA_COLS = [
 #   key_time_to_best — result-dict key for the time at which the final best solution was found
 #   key_status       — result-dict key for the status / message string
 #   key_pricing_time — result-dict key for pricing time (or None)
+#   key_routes       — result-dict key for the solution's routes {courier: [nodes]} (or None),
+#                      used for the "Solution" statistics sheet
 #   extra_cols       — list of (column_label, result_dict_key) for method-specific stats
 # Optional:
 #   baseline         — name of another method to compare this one against directly
@@ -108,6 +118,7 @@ def _bnp_method(solver_tag, pricing_algo, use_mip):
         "key_time_to_best": "time_to_best",
         "key_status":       "status_msg",
         "key_pricing_time": "pricing_time",
+        "key_routes":       "routes",
         "extra_cols":       _BNP_EXTRA_COLS,
     }
     # Without the heuristic, compare against the same pricing solver with it.
@@ -172,6 +183,18 @@ EXACT_HEADER = _INSTANCE_COLS + [
 _DETAIL_BASE = _INSTANCE_COLS + [
     "best_primal", "gap_vs_exact (%)", "bound", "total_time (s)", "time_to_best (s)", "status",
 ]
+
+
+SOLUTION_HEADER = _INSTANCE_COLS + ["method", "status", "reported_profit"] + STAT_KEYS
+
+
+def _solution_row(instance, instance_cols, method_name, status, reported_profit, routes):
+    """One row of the "Solution" sheet: statistics of a method's final solution."""
+    row = list(instance_cols) + [method_name, status, _safe(reported_profit)]
+    if reported_profit is None or routes is None:
+        return row + [None] * len(STAT_KEYS)
+    stats = solution_statistics(instance, routes, reported_profit)
+    return row + [_safe(stats[key]) for key in STAT_KEYS]
 
 
 def _detail_header(method):
@@ -292,11 +315,35 @@ def _comparison_row(methods, results, res_exact, instance_cols, run_exact):
     return row
 
 
+# ── Instance discovery ────────────────────────────────────────────────────────
+_SIZE_PATTERN = re.compile(r"_REQ(\d+)_CDR(\d+)_ODR(\d+)")
+
+
+def _list_instances(instance_dir, max_req):
+    """(nbr_req, nbr_cdr, nbr_odr, name, path) for every .txt file in instance_dir or any of its
+    subfolders whose name contains _REQ{n}_CDR{c}_ODR{o} with n ≤ max_req.
+    `name` is the path relative to instance_dir (shown in the sheets), `path` the full path.
+    Sorted by subfolder, then REQ, CDR and file name, so each subfolder's instances stay together."""
+    folder = os.path.join(_REPO_ROOT, instance_dir)
+    found = []
+    for dirpath, _, filenames in os.walk(folder):
+        for filename in filenames:
+            match = _SIZE_PATTERN.search(filename)
+            if not filename.endswith(".txt") or match is None:
+                continue
+            nbr_req, nbr_cdr, nbr_odr = map(int, match.groups())
+            if nbr_req <= max_req:
+                path = os.path.join(dirpath, filename)
+                found.append((nbr_req, nbr_cdr, nbr_odr, os.path.relpath(path, folder), path))
+    return sorted(found, key=lambda t: (os.path.dirname(t[3]), t[0], t[1], t[3]))
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    dataset  = os.path.basename(os.path.normpath(INSTANCE_DIR))
     cg_tag   = "cgall" if ADD_ALL_COLUMNS else "cgfirst"
     mip_tag  = "_".join(_mode_tag(use_mip) for use_mip in MIP_HEURISTIC_MODES)
-    out_xlsx = os.path.join(_HERE, f"bnp_pricing_comparison_{cg_tag}_{mip_tag}.xlsx")
+    out_xlsx = os.path.join(_HERE, f"bnp_pricing_comparison_{dataset}_{cg_tag}_{mip_tag}.xlsx")
 
     wb       = Workbook()
     hdr_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
@@ -331,26 +378,23 @@ def main():
     ws_comp.append(comp_header)
     _style(ws_comp)
 
-    all_sheets = ([ws_exact] if ws_exact else []) + list(method_sheets.values()) + [ws_comp]
+    ws_sol = wb.create_sheet("Solution")
+    ws_sol.append(SOLUTION_HEADER)
+    _style(ws_sol)
 
-    instances = []
-    for nbr_req in range(10, MAX_REQ + 1, 10):
-        for nbr_cdr in range(0, 12, 2):
-            nbr_odr = 10 - nbr_cdr
-            instance_file = (f"InstanceswithDemand/Instance_REQ{nbr_req}_CDR{nbr_cdr}"
-                             f"_ODR{nbr_odr}_FS0_SS{SEED}.txt")
-            instances.append((nbr_req, nbr_cdr, nbr_odr, instance_file))
+    all_sheets = ([ws_exact] if ws_exact else []) + list(method_sheets.values()) + [ws_comp, ws_sol]
+
+    instances = _list_instances(INSTANCE_DIR, MAX_REQ)
 
     total = len(instances)
     method_names = ", ".join(m["name"] for m in METHODS)
     print(f"B&P comparison: {'Exact + ' if RUN_EXACT else ''}[{method_names}]")
-    print(f"  Instances : {total}  (REQ 10 – {MAX_REQ}, CDR ∈ {{0,2,4,6,8,10}})")
+    print(f"  Instances : {total}  ({INSTANCE_DIR}, REQ ≤ {MAX_REQ})")
     print(f"  Output    : {out_xlsx}")
     wb.save(out_xlsx)
 
-    for idx, (nbr_req, nbr_cdr, nbr_odr, instance_file) in enumerate(instances, start=1):
+    for idx, (nbr_req, nbr_cdr, nbr_odr, instance_file, instance_path) in enumerate(instances, start=1):
         instance_cols = [instance_file, nbr_req, nbr_cdr, nbr_odr]
-        instance_path = os.path.join(_REPO_ROOT, instance_file)
         print(f"\n{'='*70}")
         print(f"[{idx}/{total}]  REQ={nbr_req}  CDR={nbr_cdr}  ODR={nbr_odr}")
         print(f"  {instance_file}")
@@ -413,6 +457,17 @@ def main():
 
         # ── Comparison row ────────────────────────────────────────────────────
         ws_comp.append(_comparison_row(METHODS, results, res_exact, instance_cols, RUN_EXACT))
+
+        # ── Solution statistics: one row per method (exact MIP first) ─────────
+        instance = load_instance_from_txt(instance_path)
+        if RUN_EXACT:
+            ws_sol.append(_solution_row(instance, instance_cols, "Exact", res_exact.get("status"),
+                                        res_exact.get("obj"), res_exact.get("routes")))
+        for m in METHODS:
+            res = results[m["name"]]
+            ws_sol.append(_solution_row(instance, instance_cols, m["name"], res.get(m["key_status"]),
+                                        res.get(m["key_primal"]),
+                                        res.get(m["key_routes"]) if m.get("key_routes") else None))
 
         for ws in all_sheets:
             _autosize(ws)

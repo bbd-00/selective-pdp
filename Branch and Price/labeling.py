@@ -74,7 +74,7 @@ def _dominates(a, b):
 class LabelingSolver:
     def __init__(self, instance_data, vehicle_k, z_UB, x_UB, x_ind, multipliers, verbose=False):
         """Precompute courier k's cost rates, time windows, distances and the
-        reduced gain of each eligible pickup (rev − π_p, minus cO for occasional).
+        reduced gain of each eligible pickup (rev_p − π_p, minus cO for occasional).
         x_UB is accepted only for interface parity with GraphSearchSolver."""
         self.k = vehicle_k
         self.x_ind = x_ind
@@ -114,8 +114,8 @@ class LabelingSolver:
             self.e[d], self.l[d], self.s[d] = req["e_dest"], req["l_dest"], req["delay_d"]
 
         eligible = [p for p in range(1, n + 1) if z_UB.get((p, vehicle_k), 0) == 1]
-        rev = instance_data["rev_order"]
-        gain = {p: rev - multipliers.get(p, 0.0) - req_cost for p in eligible}
+        rev = {req["id"]: req["rev"] for req in instance_data["requests"]}   # per-request revenue
+        gain = {p: rev[p] - multipliers.get(p, 0.0) - req_cost for p in eligible}
 
         # Dual-based elimination: a request with gain <= 0 never improves a route (removing it
         # never adds travel or delays later stops, by the triangle inequality), so some optimal

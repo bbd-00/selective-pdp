@@ -9,7 +9,7 @@ def load_instance_from_txt(filename):
     i = 0
     instance = {}
 
-    #   ARAMETERS
+    # PARAMETERS
     assert lines[i] == "PARAMETERS"; i += 1
     H, b, W = map(float, lines[i].split()); i += 1
     c_com_h, c_com_d, c_occ_o, c_occ_d, rev_order = map(float, lines[i].split()); i += 1
@@ -48,10 +48,14 @@ def load_instance_from_txt(filename):
         px, py, dx, dy = map(float, parts[1:5])
         dp, dd = int(parts[5]), int(parts[6])
         ep, lp, ed, ld, dem = map(float, parts[7:12])
+        # Optional 13th column: revenue of this request (e.g. the converted Sun instances);
+        # otherwise every request earns the instance-wide rev_order.
+        rev = float(parts[12]) if len(parts) > 12 else rev_order
         requests.append(dict(id=rid,
                              pickup=(px,py), dest=(dx,dy),
                              delay_p=dp, delay_d=dd,
                              e_pickup=ep, l_pickup=lp,
-                             e_dest=ed, l_dest=ld, l_dem=dem))
+                             e_dest=ed, l_dest=ld, l_dem=dem,
+                             rev=rev))
     instance["requests"] = requests
     return instance

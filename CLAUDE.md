@@ -26,7 +26,7 @@ No `requirements.txt` exists. Key packages required:
 ```bash
 python "Branch and Price/bnp_pricing_comparison.py"
 ```
-Settings are constants at the top of the script (`MAX_REQ`, `RUN_EXACT`, `TIME_LIMIT`, `EXACT_TIME_LIMIT`, `MIP_TIME_PER_NODE`, `MIP_HEURISTIC_MODES`, `ADD_ALL_COLUMNS`, `SEED`). Methods are generated as {GraphSearch, labeling} × `MIP_HEURISTIC_MODES` (e.g. `BnP_GS_mip`, `BnP_Label_nomip`); the Comparison sheet compares every method against the first and every no-MIP method against its with-MIP counterpart. It writes `bnp_pricing_comparison_{cgall|cgfirst}_{modes}.xlsx` (e.g. `_mip_nomip`) into its own folder and works from any working directory. To solve one instance verbosely:
+Settings are constants at the top of the script (`INSTANCE_DIR`, `MAX_REQ`, `RUN_EXACT`, `TIME_LIMIT`, `EXACT_TIME_LIMIT`, `MIP_TIME_PER_NODE`, `MIP_HEURISTIC_MODES`, `ADD_ALL_COLUMNS`). It runs every `.txt` file in `INSTANCE_DIR` or its subfolders (relative to the repo root, e.g. `UpdatedInstances` or `UpdatedInstances/converted_sun_120_rev`) whose name contains `_REQ{n}_CDR{c}_ODR{o}` with `n ≤ MAX_REQ`, grouped by subfolder; the `instance_file` column shows paths relative to `INSTANCE_DIR`. Methods are generated as {GraphSearch, labeling} × `MIP_HEURISTIC_MODES` (e.g. `BnP_GS_mip`, `BnP_Label_nomip`); the Comparison sheet compares every method against the first and every no-MIP method against its with-MIP counterpart. It writes `bnp_pricing_comparison_{dataset}_{cgall|cgfirst}_{modes}.xlsx` (dataset = last folder of `INSTANCE_DIR`) into its own folder and works from any working directory. To solve one instance verbosely:
 ```bash
 python "Branch and Price/branch_and_price.py" InstanceswithDemand/Instance_REQ20_CDR6_ODR4_FS0_SS0.txt
 ```
@@ -76,7 +76,8 @@ Self-contained apart from the two root modules above and `InstanceswithDemand/`.
 - **`graph_search.py`**: `GraphSearchSolver` — DFS pricing (Qiu et al. 2017, adapted). Copy of `Lagrangian/graph_search.py`.
 - **`labeling.py`**: `LabelingSolver` — ESPPRC label-setting pricing with dominance on (profit, time, open set, unreachable set). Drop-in replacement for `GraphSearchSolver` (same constructor and `solve()` output).
 - **`pricing_bounds.py`**: `TimeBudgetBound` — fractional-knapsack time-budget bound used by both pricing solvers. Copy of `Lagrangian/pricing_bounds.py`.
-- **`bnp_pricing_comparison.py`**: experiment runner; methods are listed in its `METHODS` registry, and sheets/columns are generated from it.
+- **`bnp_pricing_comparison.py`**: experiment runner; methods are listed in its `METHODS` registry, and sheets/columns are generated from it. Its "Solution" sheet has one row per instance and method (exact MIP included) with statistics of the final solution.
+- **`solution_stats.py`**: `solution_statistics(instance, routes, reported_profit)` re-simulates a solution's routes with the solvers' timing and cost rules and returns service, fleet-usage, profit-breakdown, route-structure and time-window statistics. Its `profit_check` (reported − recomputed profit), `tw_violations` and `capacity_violations` must be 0 — nonzero values mean a solver and the model disagree. `solve_exact_mip` also returns `routes` (read from the arc variables) for this.
 
 Both pricing solvers share the same exact pruning rules: requests with gain `rev − π_i − c_k ≤ 0` are removed before the search (`c_k = c_occ_o` for occasional, 0 for committed); pickups that can no longer be completed in time are dropped for the rest of a branch; a partial route is abandoned once an on-board delivery can no longer be made; and the bound is the time-budget bound. These rely on travel times = Euclidean distances (triangle inequality). They must return identical optimal values — when changing either solver, re-check the two against each other.
 
@@ -132,9 +133,10 @@ Instance_REQ{n}_CDR{c}_ODR{o}_FS0_SS{seed}.txt
 
 File sections: `PARAMETERS` → `COMMITTED_DRIVERS` → `OCCASIONAL_DRIVERS` → `REQUESTS`
 
-`instance_loader.load_instance_from_txt(path)` returns a dict with keys: `H`, `b`, `W`, costs (`c_com_h`, `c_com_d`, `c_occ_o`, `c_occ_d`, `rev_order`), and lists `committed`, `occasional`, `requests`.
+`instance_loader.load_instance_from_txt(path)` returns a dict with keys: `H`, `b`, `W`, costs (`c_com_h`, `c_com_d`, `c_occ_o`, `c_occ_d`, `rev_order`), and lists `committed`, `occasional`, `requests`. Each request has a `rev`: the optional 13th column of its line (per-request revenue), otherwise `rev_order`. `solve_exact_mip.py` and the B&P pricing solvers use `rev`.
 
-- **`InstanceswithDemand/`**: the set used by all current code (B&P, exact MIP, Lagrangian). Fleets of 10 couriers (CDR/ODR = 0/10 … 10/0), REQ 10–100, seed `SS0` only. Includes courier capacities and request demands.
+- **`InstanceswithDemand/`**: the original generated set. Fleets of 10 couriers (CDR/ODR = 0/10 … 10/0), REQ 10–100, seed `SS0` only. Includes courier capacities and request demands.
+- **`UpdatedInstances/`**: converted benchmarks in the same format, same fleet mixes and costs, but different parameters — `H` = 1000 (Ropke) / 840 (Sun), service times all 0, window widths 60–120 (`W` in the file is not the actual width), capacities 15–40 with demands 5–20. `converted_ropke_instances/`: REQ 30–75, revenue 20 for all. `converted_sun_{120,180,240}_rev/` (number = committed window length): REQ 10–45, per-request revenues 11–76 in the 13th column (also in `*_request_profits.csv`). File names differ (`AA30.3_REQ30_CDR4_ODR6.txt`, `Prob-10A-50_REQ10_CDR4_ODR6_CTW120_OTW60_random.txt`).
 - **`InstancesTTW/`**: older format without capacities/demands — the root `instance_loader.py` cannot read it. Despite the name, its windows are not tightened (all exactly `W = 60` wide).
 
 Known generator quirk (`InstancesGeneratorTTW2.ipynb`, delivery windows): the delivery window is the pickup window shifted by travel time only, without the delivery's service time. Under the end-of-service convention, a pickup ending in the last `delay_d` time units of its window cannot be delivered on time. All instances in both folders have this. The `tighten_time_windows` routine (generator notebook and two `Formulations/` scripts) is not applied to `InstanceswithDemand/`, and its rule 3 uses `L[i]` where `L[j]` is intended, so that rule never tightens anything.
@@ -151,6 +153,8 @@ Known generator quirk (`InstancesGeneratorTTW2.ipynb`, delivery windows): the de
 | Time limit | 3600s | Gurobi solver limit |
 
 ## Known Issues
+
+- The Lagrangian scripts (including `Lagrangian/graph_search.py`) still use the single `rev_order` for every request, so they ignore per-request revenues (Sun instances). Only `solve_exact_mip.py` and the `Branch and Price/` solvers use `rev`.
 
 - `Branch and Price/` and `Lagrangian/` each have their own `graph_search.py` and `pricing_bounds.py` (currently identical). Changes to one are not picked up by the other. `Lagrangian/lagrangian_comparison_full.py` imports both folders in one process, so all its methods share a single `graph_search` module (whichever loads first).
 - `Lagrangian/lagrangian_comparison_full.py` passes `max_cg_iters` to `solve_instance_bnp`, which does not accept it, so its B&P rows fail.

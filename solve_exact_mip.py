@@ -3,9 +3,10 @@ Exact MIP for the SPDPTW with two courier types (3-index formulation, Gurobi).
 
 solve_exact_mip(instance_path, time_limit, verbose) builds and solves the full binary
 model and returns a dict with keys:
-    obj, lp_relax_ub, mip_gap, status, time, time_to_best
+    obj, lp_relax_ub, mip_gap, status, time, time_to_best, routes
 The LP relaxation is solved first and is not included in `time`; `time_to_best` is the
-Gurobi runtime at which the final best incumbent was found.
+Gurobi runtime at which the final best incumbent was found; `routes` maps each courier index
+to its node sequence (pickups 1..n, deliveries n+1..2n, no depots).
 """
 
 import os
@@ -77,7 +78,7 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
           {d["id"]: d["cap"] for d in instance["occasional"]})
     Lk_org = Lk.copy()
 
-    p      = {i: instance["rev_order"] for i in P}
+    p      = {req["id"]: req["rev"] for req in instance["requests"]}   # per-request revenue
     wC     = instance["c_com_h"] / b
     cO     = instance["c_occ_o"]
     deltaC = instance["c_com_d"]
@@ -231,7 +232,18 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
 
     if m.SolCount == 0:
         return {"obj": None, "lp_relax_ub": lp_relax_ub, "mip_gap": None, "status": m.Status,
-                "time": elapsed, "time_to_best": None}
+                "time": elapsed, "time_to_best": None, "routes": None}
+
+    # Each courier's route: follow its used arcs from the source 0 to the sink 2n+1
+    # (node sequence without depots, same format as the B&P solver's routes).
+    successor = {(i, k): j for (i, j) in A for k in K if x[i, j, k].X > 0.5}
+    routes = {}
+    for k in K:
+        route, node = [], successor.get((0, k))
+        while node is not None and node != 2 * n + 1 and len(route) <= 2 * n:
+            route.append(node)
+            node = successor.get((node, k))
+        routes[k] = route
 
     return {
         "obj":          float(m.objVal),
@@ -240,4 +252,5 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
         "status":       m.Status,
         "time":         elapsed,
         "time_to_best": best_found["time"],
+        "routes":       routes,
     }
