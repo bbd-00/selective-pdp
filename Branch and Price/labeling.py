@@ -93,7 +93,9 @@ class LabelingSolver:
 
         b = int(instance_data["b"])
         if self.is_committed:
-            self.fixed_cost = instance_data["c_com_h"] / b * (self.L_k - self.E_k)
+            # block cost on the original shift, even if preprocessing tightened E_k/L_k
+            shift_length = driver.get("l_orig", self.L_k) - driver.get("e_orig", self.E_k)
+            self.fixed_cost = instance_data["c_com_h"] / b * shift_length
             self.arc_cost = instance_data["c_com_d"]
             self.start_arc_cost = instance_data["c_com_d"]
             req_cost = 0.0

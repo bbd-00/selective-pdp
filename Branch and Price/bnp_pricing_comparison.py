@@ -6,14 +6,20 @@
 # column shows each path relative to INSTANCE_DIR.  Methods are defined in the METHODS
 # registry below — sheets, headers, and comparison columns are generated from it.
 #
-# Output: bnp_pricing_comparison_{dataset}_{cgall|cgfirst}_{modes}.xlsx, where {dataset} is
-# the last folder of INSTANCE_DIR and {modes} lists the MIP-heuristic settings run,
-# e.g. "mip", "nomip" or "mip_nomip".
-#   Sheet "Exact"        — per-instance exact MIP results (only if RUN_EXACT)
+# Every method (and the exact MIP) is run once per time-window tightening mode in
+# TIGHTEN_MODES; both solvers then use the same preprocessing (preprocessing.py), whose time is
+# reported separately (prep_time) and is not part of any solve time.
+#
+# Output: bnp_pricing_comparison_{dataset}_{cgall|cgfirst}_{modes}_{twmodes}.xlsx, where
+# {dataset} is the last folder of INSTANCE_DIR, {modes} lists the MIP-heuristic settings run
+# (e.g. "mip_nomip") and {twmodes} the tightening settings (e.g. "notw_tw").
+#   Sheet "Exact"        — exact MIP results, one row per instance and tightening mode
+#                          (only if RUN_EXACT)
 #   Sheet "<MethodName>" — one detail sheet per configured method
 #   Sheet "Comparison"   — all methods side-by-side per instance, plus pairwise columns:
-#                          every method vs the first (reference) method, and every method
-#                          vs its own "baseline" (e.g. BnP_GS_nomip vs BnP_GS_mip)
+#                          every method vs the first (reference) method, every method vs its
+#                          own "baselines" (e.g. BnP_GS_nomip_tw vs BnP_GS_mip_tw and vs
+#                          BnP_GS_nomip_notw), and the tightened exact MIP vs the untightened one
 #   Sheet "Solution"     — statistics of each method's final solution (see solution_stats.py),
 #                          one row per instance and method
 
@@ -37,16 +43,18 @@ from solve_exact_mip import solve_exact_mip
 
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
-INSTANCE_DIR      = "UpdatedInstances"  # folder relative to the repo root, e.g.
+INSTANCE_DIR      = "InstanceswithDemand"  # folder relative to the repo root, e.g.
                                            # "UpdatedInstances/converted_sun_120_rev"
 MAX_REQ           = 100              # largest REQ size to include
 RUN_EXACT         = False            # False: skip the exact MIP (two-way pricing comparison)
 EXACT_TIME_LIMIT  = 3600            # seconds for the exact MIP
 TIME_LIMIT        = 3600            # seconds per B&P run
 MIP_TIME_PER_NODE = 20.0            # seconds for the RMP MIP at each node
-MIP_HEURISTIC_MODES = [True, False]  # per-node MIP heuristic settings to run, each as its own
+MIP_HEURISTIC_MODES = [True]  # per-node MIP heuristic settings to run, each as its own
                                      # methods: [True] / [False] / [True, False] (side by side)
 ADD_ALL_COLUMNS   = True            # False: first positive-rc column per round; True: all
+TIGHTEN_MODES     = [False, True]   # time-window tightening settings to run, each as its own
+                                    # methods: [False] / [True] / [False, True] (side by side)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BNP_KWARGS = {
@@ -79,6 +87,23 @@ _BNP_EXTRA_COLS = [
     ("mip_time (s)",       "mip_time"),
 ]
 
+# Preprocessing statistics (preprocessing.preprocess_instance), for B&P and the exact MIP
+_PREP_COLS = [
+    ("prep_time (s)",          "prep_time"),
+    ("prep_rounds",            "prep_rounds"),
+    ("tw_width_reduction (%)", "tw_width_reduction_servable_pct"),
+    ("unservable_requests",    "unservable_requests"),
+    ("zUB_pairs",              "zUB_pairs"),
+    ("arcs_kept",              "arcs_kept"),
+]
+
+
+def _flatten_prep(res):
+    """Copy the preprocessing statistics into the result dict so they can be read by key."""
+    for key, value in (res.get("prep_stats") or {}).items():
+        res.setdefault(key, value)
+    return res
+
 
 # ── Method registry ───────────────────────────────────────────────────────────
 # The first entry is the reference for the "vs reference" comparison columns.
@@ -97,7 +122,7 @@ _BNP_EXTRA_COLS = [
 #                      used for the "Solution" statistics sheet
 #   extra_cols       — list of (column_label, result_dict_key) for method-specific stats
 # Optional:
-#   baseline         — name of another method to compare this one against directly
+#   baselines        — names of other methods to compare this one against directly
 
 _PRICING_SOLVERS = [("GS", "graphsearch"), ("Label", "labeling")]
 
@@ -106,12 +131,20 @@ def _mode_tag(use_mip):
     return "mip" if use_mip else "nomip"
 
 
-def _bnp_method(solver_tag, pricing_algo, use_mip):
+def _tw_tag(tighten):
+    return "tw" if tighten else "notw"
+
+
+def _bnp_name(solver_tag, use_mip, tighten):
+    return f"BnP_{solver_tag}_{_mode_tag(use_mip)}_{_tw_tag(tighten)}"
+
+
+def _bnp_method(solver_tag, pricing_algo, use_mip, tighten):
     method = {
-        "name":             f"BnP_{solver_tag}_{_mode_tag(use_mip)}",
+        "name":             _bnp_name(solver_tag, use_mip, tighten),
         "func":             solve_instance_bnp,
         "kwargs":           {**_BNP_KWARGS, "pricing_algo": pricing_algo,
-                             "use_mip_heuristic": use_mip},
+                             "use_mip_heuristic": use_mip, "tighten": tighten},
         "key_primal":       "best_primal",
         "key_bound":        "lp_root_bound",
         "key_time":         "total_time",
@@ -119,17 +152,25 @@ def _bnp_method(solver_tag, pricing_algo, use_mip):
         "key_status":       "status_msg",
         "key_pricing_time": "pricing_time",
         "key_routes":       "routes",
-        "extra_cols":       _BNP_EXTRA_COLS,
+        "extra_cols":       _BNP_EXTRA_COLS + _PREP_COLS,
+        "baselines":        [],
     }
     # Without the heuristic, compare against the same pricing solver with it.
     if not use_mip and True in MIP_HEURISTIC_MODES:
-        method["baseline"] = f"BnP_{solver_tag}_{_mode_tag(True)}"
+        method["baselines"].append(_bnp_name(solver_tag, True, tighten))
+    # With tightening, compare against the same method without it.
+    if tighten and False in TIGHTEN_MODES:
+        method["baselines"].append(_bnp_name(solver_tag, use_mip, False))
     return method
 
 
-METHODS = [_bnp_method(tag, algo, use_mip)
+METHODS = [_bnp_method(tag, algo, use_mip, tighten)
            for tag, algo in _PRICING_SOLVERS
-           for use_mip in MIP_HEURISTIC_MODES]
+           for use_mip in MIP_HEURISTIC_MODES
+           for tighten in TIGHTEN_MODES]
+
+# Exact MIP, once per tightening mode; the first one is the reference for gap_vs_exact
+EXACT_RUNS = [(f"Exact_{_tw_tag(tighten)}", tighten) for tighten in TIGHTEN_MODES]
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -176,9 +217,21 @@ def _ratio(ref, other):
 _INSTANCE_COLS = ["instance_file", "nbr_req", "nbr_cdr", "nbr_odr"]
 
 EXACT_HEADER = _INSTANCE_COLS + [
-    "Exact_obj", "Exact_lp_relax_ub", "Exact_mip_gap (%)", "Exact_time (s)",
+    "tighten", "Exact_obj", "Exact_lp_relax_ub", "Exact_mip_gap (%)", "Exact_time (s)",
     "Exact_time_to_best (s)", "Exact_status",
-]
+] + [label for label, _ in _PREP_COLS]
+
+
+def _exact_row(instance_cols, tighten, res):
+    return list(instance_cols) + [
+        tighten,
+        _safe(res.get("obj")),
+        _safe(res.get("lp_relax_ub")),
+        _safe(res.get("mip_gap")),
+        _safe(res.get("time"), 2),
+        _safe(res.get("time_to_best"), 2),
+        res.get("status"),
+    ] + [_safe(res.get(rkey)) for _, rkey in _PREP_COLS]
 
 _DETAIL_BASE = _INSTANCE_COLS + [
     "best_primal", "gap_vs_exact (%)", "bound", "total_time (s)", "time_to_best (s)", "status",
@@ -203,43 +256,49 @@ def _detail_header(method):
 
 def _comparison_pairs(methods):
     """(method, baseline) pairs for the pairwise columns: every method vs the first one,
-    then every method vs its own declared baseline, without duplicates."""
+    then every method vs each of its own declared baselines, without duplicates."""
     pairs = [(m, methods[0]) for m in methods[1:]]
     by_name = {m["name"]: m for m in methods}
     for m in methods:
-        base = by_name.get(m.get("baseline"))
-        if base is not None and (m, base) not in pairs:
-            pairs.append((m, base))
+        for base_name in m.get("baselines", []):
+            base = by_name.get(base_name)
+            if base is not None and (m, base) not in pairs:
+                pairs.append((m, base))
     return pairs
 
 
+def _exact_names(run_exact):
+    return [name for name, _ in EXACT_RUNS] if run_exact else []
+
+
 def _comparison_header(methods, run_exact):
+    ex = _exact_names(run_exact)
     cols = list(_INSTANCE_COLS)
     # ── objectives / primals ──
-    if run_exact:
-        cols.append("Exact_obj")
+    cols += [f"{e}_obj" for e in ex]
     cols += [f"{m['name']}_primal" for m in methods]
-    # ── gap vs exact ──
-    if run_exact:
-        cols.append("Exact_mip_gap (%)")
+    # ── gap vs exact (the first exact run is the reference) ──
+    cols += [f"{e}_mip_gap (%)" for e in ex]
+    if ex:
         cols += [f"{m['name']}_gap_vs_exact (%)" for m in methods]
     # ── bounds ──
-    if run_exact:
-        cols.append("Exact_lp_relax_ub")
+    cols += [f"{e}_lp_relax_ub" for e in ex]
     cols += [f"{m['name']}_bound" for m in methods]
     # ── wall-clock times ──
-    if run_exact:
-        cols.append("Exact_time (s)")
+    cols += [f"{e}_time (s)" for e in ex]
     cols += [f"{m['name']}_time (s)" for m in methods]
     # ── time until the final best solution was found ──
-    if run_exact:
-        cols.append("Exact_time_to_best (s)")
+    cols += [f"{e}_time_to_best (s)" for e in ex]
     cols += [f"{m['name']}_time_to_best (s)" for m in methods]
     # ── statuses ──
-    if run_exact:
-        cols.append("Exact_status")
+    cols += [f"{e}_status" for e in ex]
     cols += [f"{m['name']}_status" for m in methods]
-    # ── pairwise: method vs reference, method vs its own baseline ──
+    # ── pairwise: each exact run vs the first one (tightening on vs off) ──
+    for e in ex[1:]:
+        cols += [f"{e}_obj_diff_vs_{ex[0]}",
+                 f"{e}_lp_diff_vs_{ex[0]}",
+                 f"{e}_time_speedup_vs_{ex[0]}"]
+    # ── pairwise: method vs reference, method vs its own baselines ──
     for m, base in _comparison_pairs(methods):
         a, b = m["name"], base["name"]
         cols += [f"{a}_bound_diff_vs_{b}",
@@ -270,37 +329,40 @@ def _detail_row(method, res, instance_cols, exact_obj):
 
 
 def _comparison_row(methods, results, res_exact, instance_cols, run_exact):
+    """res_exact: {exact run name: result dict} (empty if not run_exact)."""
     def get(m, key_field):
         key = m.get(key_field)
         return results[m["name"]].get(key) if key else None
 
-    exact_obj = res_exact.get("obj") if run_exact else None
+    ex = _exact_names(run_exact)
+    exr = [res_exact.get(e, {}) for e in ex]
+    exact_obj = exr[0].get("obj") if exr else None
     row = list(instance_cols)
     # ── objectives / primals ──
-    if run_exact:
-        row.append(_safe(exact_obj))
+    row += [_safe(r.get("obj")) for r in exr]
     row += [_safe(get(m, "key_primal")) for m in methods]
     # ── gap vs exact ──
-    if run_exact:
-        row.append(_safe(res_exact.get("mip_gap")))
+    row += [_safe(r.get("mip_gap")) for r in exr]
+    if ex:
         row += [_gap_vs_exact(get(m, "key_primal"), exact_obj) for m in methods]
     # ── bounds ──
-    if run_exact:
-        row.append(_safe(res_exact.get("lp_relax_ub")))
+    row += [_safe(r.get("lp_relax_ub")) for r in exr]
     row += [_safe(get(m, "key_bound")) for m in methods]
     # ── wall-clock times ──
-    if run_exact:
-        row.append(_safe(res_exact.get("time"), 2))
+    row += [_safe(r.get("time"), 2) for r in exr]
     row += [_safe(get(m, "key_time"), 2) for m in methods]
     # ── time until the final best solution was found ──
-    if run_exact:
-        row.append(_safe(res_exact.get("time_to_best"), 2))
+    row += [_safe(r.get("time_to_best"), 2) for r in exr]
     row += [_safe(get(m, "key_time_to_best"), 2) for m in methods]
     # ── statuses ──
-    if run_exact:
-        row.append(res_exact.get("status"))
+    row += [r.get("status") for r in exr]
     row += [get(m, "key_status") for m in methods]
-    # ── pairwise: method vs reference, method vs its own baseline ──
+    # ── pairwise: each exact run vs the first one ──
+    for r in exr[1:]:
+        row += [_diff(r.get("obj"), exr[0].get("obj")),
+                _diff(r.get("lp_relax_ub"), exr[0].get("lp_relax_ub")),
+                _ratio(exr[0].get("time"), r.get("time"))]
+    # ── pairwise: method vs reference, method vs its own baselines ──
     for m, base in _comparison_pairs(methods):
         row += [_diff(get(m, "key_bound"),  get(base, "key_bound")),
                 _diff(get(m, "key_primal"), get(base, "key_primal")),
@@ -343,7 +405,8 @@ def main():
     dataset  = os.path.basename(os.path.normpath(INSTANCE_DIR))
     cg_tag   = "cgall" if ADD_ALL_COLUMNS else "cgfirst"
     mip_tag  = "_".join(_mode_tag(use_mip) for use_mip in MIP_HEURISTIC_MODES)
-    out_xlsx = os.path.join(_HERE, f"bnp_pricing_comparison_{dataset}_{cg_tag}_{mip_tag}.xlsx")
+    tw_tag   = "_".join(_tw_tag(tighten) for tighten in TIGHTEN_MODES)
+    out_xlsx = os.path.join(_HERE, f"bnp_pricing_comparison_{dataset}_{cg_tag}_{mip_tag}_{tw_tag}.xlsx")
 
     wb       = Workbook()
     hdr_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
@@ -388,7 +451,8 @@ def main():
 
     total = len(instances)
     method_names = ", ".join(m["name"] for m in METHODS)
-    print(f"B&P comparison: {'Exact + ' if RUN_EXACT else ''}[{method_names}]")
+    exact_names  = ", ".join(_exact_names(RUN_EXACT))
+    print(f"B&P comparison: {'[' + exact_names + '] + ' if RUN_EXACT else ''}[{method_names}]")
     print(f"  Instances : {total}  ({INSTANCE_DIR}, REQ ≤ {MAX_REQ})")
     print(f"  Output    : {out_xlsx}")
     wb.save(out_xlsx)
@@ -403,7 +467,10 @@ def main():
         if not os.path.exists(instance_path):
             print("  [SKIP] file not found")
             if ws_exact:
-                ws_exact.append(instance_cols + [None] * (len(EXACT_HEADER) - 5) + ["FILE NOT FOUND"])
+                for _, tighten in EXACT_RUNS:
+                    row = _exact_row(instance_cols, tighten, {})
+                    row[EXACT_HEADER.index("Exact_status")] = "FILE NOT FOUND"
+                    ws_exact.append(row)
             for m in METHODS:
                 hdr = _detail_header(m)
                 row = instance_cols + [None] * (len(hdr) - 4)
@@ -415,25 +482,23 @@ def main():
             wb.save(out_xlsx)
             continue
 
-        # ── Exact MIP ────────────────────────────────────────────────────────
+        # ── Exact MIP, once per tightening mode ─────────────────────────────
         res_exact = {}
         if RUN_EXACT:
-            print("\n--- Exact MIP ---")
-            try:
-                res_exact = solve_exact_mip(instance_path, time_limit=EXACT_TIME_LIMIT, verbose=False)
-            except Exception as exc:
-                print(f"  [ERROR] {exc}")
-                res_exact = {"status": f"ERROR: {exc}"}
-            ws_exact.append(instance_cols + [
-                _safe(res_exact.get("obj")),
-                _safe(res_exact.get("lp_relax_ub")),
-                _safe(res_exact.get("mip_gap")),
-                _safe(res_exact.get("time"), 2),
-                _safe(res_exact.get("time_to_best"), 2),
-                res_exact.get("status"),
-            ])
-            print(f"  obj={res_exact.get('obj')}  gap={res_exact.get('mip_gap')}%  "
-                  f"time={res_exact.get('time') or 0.0:.1f}s  status={res_exact.get('status')}")
+            for exact_name, tighten in EXACT_RUNS:
+                print(f"\n--- {exact_name} ---")
+                try:
+                    res = solve_exact_mip(instance_path, time_limit=EXACT_TIME_LIMIT,
+                                          verbose=False, tighten=tighten)
+                except Exception as exc:
+                    print(f"  [ERROR] {exc}")
+                    res = {"status": f"ERROR: {exc}"}
+                res_exact[exact_name] = _flatten_prep(res)
+                ws_exact.append(_exact_row(instance_cols, tighten, res))
+                print(f"  obj={res.get('obj')}  gap={res.get('mip_gap')}%  "
+                      f"time={res.get('time') or 0.0:.1f}s  prep={res.get('prep_time') or 0.0:.2f}s  "
+                      f"status={res.get('status')}")
+        exact_ref_obj = res_exact.get(EXACT_RUNS[0][0], {}).get("obj") if RUN_EXACT else None
 
         # ── Configured methods ────────────────────────────────────────────────
         results = {}
@@ -444,9 +509,9 @@ def main():
             except Exception as exc:
                 print(f"  [ERROR] {exc}")
                 res = {m["key_status"]: f"ERROR: {exc}"}
-            results[m["name"]] = res
+            results[m["name"]] = _flatten_prep(res)
             method_sheets[m["name"]].append(
-                _detail_row(m, res, instance_cols, res_exact.get("obj"))
+                _detail_row(m, res, instance_cols, exact_ref_obj)
             )
             pricing = (f"  pricing={res.get(m['key_pricing_time']) or 0.0:.2f}s"
                        if m.get("key_pricing_time") else "")
@@ -459,15 +524,34 @@ def main():
         ws_comp.append(_comparison_row(METHODS, results, res_exact, instance_cols, RUN_EXACT))
 
         # ── Solution statistics: one row per method (exact MIP first) ─────────
-        instance = load_instance_from_txt(instance_path)
-        if RUN_EXACT:
-            ws_sol.append(_solution_row(instance, instance_cols, "Exact", res_exact.get("status"),
-                                        res_exact.get("obj"), res_exact.get("routes")))
+        # Computed on the ORIGINAL instance (not the tightened one), so tw_violations and
+        # profit_check also validate the tightening and the original-window costs.
+        # Guarded like the solvers: a load or statistics failure becomes an error row
+        # instead of stopping the batch before this instance is saved.
+        sol_entries = []
+        for exact_name in _exact_names(RUN_EXACT):
+            res = res_exact.get(exact_name, {})
+            sol_entries.append((exact_name, res.get("status"), res.get("obj"), res.get("routes")))
         for m in METHODS:
             res = results[m["name"]]
-            ws_sol.append(_solution_row(instance, instance_cols, m["name"], res.get(m["key_status"]),
-                                        res.get(m["key_primal"]),
-                                        res.get(m["key_routes"]) if m.get("key_routes") else None))
+            sol_entries.append((m["name"], res.get(m["key_status"]), res.get(m["key_primal"]),
+                                res.get(m["key_routes"]) if m.get("key_routes") else None))
+
+        try:
+            instance, load_error = load_instance_from_txt(instance_path), None
+        except Exception as exc:
+            instance, load_error = None, exc
+
+        for method_name, status, profit, routes in sol_entries:
+            try:
+                if load_error is not None:
+                    raise load_error
+                ws_sol.append(_solution_row(instance, instance_cols, method_name, status,
+                                            profit, routes))
+            except Exception as exc:
+                print(f"  [STATS ERROR] {method_name}: {exc}")
+                ws_sol.append(list(instance_cols) + [method_name, f"STATS ERROR: {exc}",
+                                                     _safe(profit)] + [None] * len(STAT_KEYS))
 
         for ws in all_sheets:
             _autosize(ws)

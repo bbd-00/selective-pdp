@@ -1,12 +1,14 @@
 """
 Exact MIP for the SPDPTW with two courier types (3-index formulation, Gurobi).
 
-solve_exact_mip(instance_path, time_limit, verbose) builds and solves the full binary
+solve_exact_mip(instance_path, time_limit, verbose, tighten) builds and solves the full binary
 model and returns a dict with keys:
-    obj, lp_relax_ub, mip_gap, status, time, time_to_best, routes
-The LP relaxation is solved first and is not included in `time`; `time_to_best` is the
-Gurobi runtime at which the final best incumbent was found; `routes` maps each courier index
-to its node sequence (pickups 1..n, deliveries n+1..2n, no depots).
+    obj, lp_relax_ub, mip_gap, status, time, time_to_best, routes, prep_time, prep_stats
+Preprocessing (courier-request and arc elimination, plus time-window tightening when
+tighten=True) comes from preprocessing.preprocess_instance, shared with the B&P solver; it and
+the LP relaxation are not included in `time`. `time_to_best` is the Gurobi runtime at which the
+final best incumbent was found; `routes` maps each courier index to its node sequence
+(pickups 1..n, deliveries n+1..2n, no depots). Costs use the original courier windows.
 """
 
 import os
@@ -21,10 +23,13 @@ from gurobipy import GRB
 # different versions).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from instance_loader import load_instance_from_txt
+from preprocessing import preprocess_instance
 
-def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
-    """Solve the full binary MILP with Gurobi. Returns (obj_val, status, elapsed)."""
-    instance = load_instance_from_txt(instance_path)
+def solve_exact_mip(instance_path, time_limit=3600, verbose=False, tighten=False):
+    """Solve the full binary MILP with Gurobi (see the module docstring for the result)."""
+    # Shared preprocessing; with tighten=True the windows are tightened first (not timed in `time`)
+    prep     = preprocess_instance(load_instance_from_txt(instance_path), tighten=tighten)
+    instance = prep["instance"]
 
     b         = int(instance["b"])
     num_comm  = len(instance["committed"])
@@ -70,13 +75,12 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
     dem[0] = 0
     dem[2 * n + 1] = 0
 
-    Ek = ({d["id"]: d["e"] for d in instance["committed"]} |
-          {d["id"]: d["e"] for d in instance["occasional"]})
-    Lk = ({d["id"]: d["l"] for d in instance["committed"]} |
-          {d["id"]: d["l"] for d in instance["occasional"]})
-    Qk = ({d["id"]: d["cap"] for d in instance["committed"]} |
-          {d["id"]: d["cap"] for d in instance["occasional"]})
-    Lk_org = Lk.copy()
+    couriers = instance["committed"] + instance["occasional"]
+    Ek = {k: d["e"] for k, d in enumerate(couriers)}      # (possibly tightened) shift window
+    Lk = {k: d["l"] for k, d in enumerate(couriers)}
+    Qk = {k: d["cap"] for k, d in enumerate(couriers)}
+    Ek_org = {k: d["e_orig"] for k, d in enumerate(couriers)}   # original shift, for the block cost
+    Lk_org = {k: d["l_orig"] for k, d in enumerate(couriers)}
 
     p      = {req["id"]: req["rev"] for req in instance["requests"]}   # per-request revenue
     wC     = instance["c_com_h"] / b
@@ -84,28 +88,9 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
     deltaC = instance["c_com_d"]
     deltaO = instance["c_occ_d"]
 
-    z_UB = {
-        (pickup, driver): (
-            1 if (li[pickup] - si[pickup] >= max(dijk[0, pickup, driver] + Ek[driver], ei[pickup])
-                  and Lk[driver] >= ei[pickup + num_req] + si[pickup + num_req])
-            else 0
-        )
-        for driver in K for pickup in P
-    }
-
-    x_UB = {
-        (i, j): 0 if (ei[i] + dij[i,j] + si[j] > li[j]) or (i in D and j == i - num_req) else 1
-        for (i, j) in A2
-    }
-    UBxIPC1 = {
-        (n2, d2): 0 if (d2 in D and d2 - num_req != n2 and x_UB.get((d2-num_req, n2), 0) == 0) else 1
-        for (n2, d2) in A2
-    }
-    UBxIPC2 = {
-        (p2, n2): 0 if (p2 in P and p2+num_req != n2 and x_UB.get((n2, p2+num_req), 0) == 0) else 1
-        for (p2, n2) in A2
-    }
-    x_ind = {(i, j): x_UB[i,j] * UBxIPC1[i,j] * UBxIPC2[i,j] for (i, j) in A2}
+    # Courier-request (z_UB) and arc (x_ind) elimination, shared with the B&P solver
+    z_UB  = prep["z_UB"]
+    x_ind = prep["x_ind"]
     A2    = [(i, j) for (i, j) in A2 if x_ind[i, j] == 1]
     A     = A1 + A2 + A3
     PK    = [(pp, kk) for pp in P for kk in K if z_UB[pp, kk] == 1]
@@ -115,13 +100,13 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
     m.Params.TimeLimit  = time_limit
 
     x    = m.addVars(A, K, vtype=GRB.BINARY,     name="x")
-    Lvar = m.addVars(A2, K, vtype=GRB.CONTINUOUS, name="L")
+    Lvar = m.addVars(A2, vtype=GRB.CONTINUOUS, name="L")    # load on arc, shared by all couriers
     y    = m.addVars(P + D, K, vtype=GRB.BINARY,  name="y")
     T    = m.addVars(P + D + [0, 2*n+1], K, vtype=GRB.CONTINUOUS, lb=0, name="T")
 
     obj = gp.quicksum(p[i] * gp.quicksum(y[i,k] for k in K) for i in P)
     for k in KC:
-        obj -= wC*(Lk_org[k]-Ek[k]) + deltaC*(
+        obj -= wC*(Lk_org[k]-Ek_org[k]) + deltaC*(
             gp.quicksum(dijk[0,j,k]*x[0,j,k] for (_,j) in A1) +
             gp.quicksum(dij[i,j]*x[i,j,k] for (i,j) in A2)
         )
@@ -195,16 +180,17 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
     for k in K:
         m.addConstr(Ek[k]*gp.quicksum(x[0,i,k] for i in P if (i,k) in PK) <= T[0,k])
         m.addConstr(T[2*n+1,k] <= Lk[k]*gp.quicksum(x[0,i,k] for i in P if (i,k) in PK))
-    for k in K:
-        for i in P + D:
-            m.addConstr(
-                gp.quicksum(Lvar[i,j,k] for j in P+D if (i,j) in A2) -
-                gp.quicksum(Lvar[j,i,k] for j in P+D if (j,i) in A2)
-                == dem[i]*gp.quicksum(x[i,j,k] for j in V if (i,j) in A)
-            )
-        for (i,j) in A2:
-            m.addConstr(Lvar[i,j,k] >= max(dem[i],0)*x[i,j,k])
-            m.addConstr(Lvar[i,j,k] <= (Qk[k]+min(dem[i],0))*x[i,j,k])
+    # Load flow with one load variable per arc: each arc is used by at most one courier, so the
+    # sums over k pick the capacity of whichever courier uses it.
+    for i in P + D:
+        m.addConstr(
+            gp.quicksum(Lvar[i,j] for j in P+D if (i,j) in A2) -
+            gp.quicksum(Lvar[j,i] for j in P+D if (j,i) in A2)
+            == dem[i]*gp.quicksum(x[i,j,k] for k in K for j in V if (i,j) in A)
+        )
+    for (i,j) in A2:
+        m.addConstr(Lvar[i,j] >= gp.quicksum(max(dem[i],0)*x[i,j,k] for k in K))
+        m.addConstr(Lvar[i,j] <= gp.quicksum((Qk[k]+min(dem[i],0))*x[i,j,k] for k in K))
 
     # LP relaxation (untimed — excluded from MIP timing per user request).
     # update() first: relax() copies only processed changes, so without it the LP is empty.
@@ -232,7 +218,8 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
 
     if m.SolCount == 0:
         return {"obj": None, "lp_relax_ub": lp_relax_ub, "mip_gap": None, "status": m.Status,
-                "time": elapsed, "time_to_best": None, "routes": None}
+                "time": elapsed, "time_to_best": None, "routes": None,
+                "prep_time": prep["stats"]["prep_time"], "prep_stats": prep["stats"]}
 
     # Each courier's route: follow its used arcs from the source 0 to the sink 2n+1
     # (node sequence without depots, same format as the B&P solver's routes).
@@ -253,4 +240,6 @@ def solve_exact_mip(instance_path, time_limit=3600, verbose=False):
         "time":         elapsed,
         "time_to_best": best_found["time"],
         "routes":       routes,
+        "prep_time":    prep["stats"]["prep_time"],
+        "prep_stats":   prep["stats"],
     }

@@ -94,7 +94,7 @@ for mm in li.keys():
 print("H:",H)
 
 # pruning unfeasible links and assignments
-z_UB = {(pickup,driver): (1 if (li[pickup] - si[pickup] >= max(dijk[0,pickup,driver] + Ek[driver],ei[pickup]) and Lk[driver] >= ei[pickup + num_requests] + si[pickup + num_requests]) else 0) for driver in K for pickup in P} #cart_prod_pickups_destinations                        
+z_UB = {(pickup,driver): (1 if (li[pickup] - si[pickup] >= max(dijk[0,pickup,driver] + Ek[driver], ei[pickup] - si[pickup]) and Lk[driver] >= ei[pickup + num_requests]) else 0) for driver in K for pickup in P} #cart_prod_pickups_destinations                        
 x_UB = {(i,j): (0 if ( (ei[i] + dij[i, j] + si[j] > li[j]) or (i in D and j==i-num_requests) ) else 1) for (i,j) in A2} #fixation based on early/latest time and x[delta(p),p]=0
 UBxIPC1 = {(n,d): 0 if (d in D and d-num_requests!=n and x_UB[d-num_requests,n]==0 ) else 1 for (n,d) in A2}
 UBxIPC2 = {(p,n): 0 if (p in P and p+num_requests!=n and x_UB[n,p + num_requests]==0 ) else 1 for (p,n) in A2}

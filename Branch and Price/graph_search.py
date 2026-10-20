@@ -121,6 +121,8 @@ class GraphSearchSolver:
         self.E_k = self.driver["e"]
         self.L_k = self.driver["l"]
         self.Q_k = self.driver["cap"]
+        # Committed block cost is paid on the original shift, even if preprocessing tightened E_k/L_k
+        self.shift_length = self.driver.get("l_orig", self.L_k) - self.driver.get("e_orig", self.E_k)
     
     def _check_feasibility(self, P_tilde, R_tilde, D_tilde):
         """
@@ -129,7 +131,7 @@ class GraphSearchSolver:
 
         Checks (modified):
         - Time windows based on END of service:
-            end_service_i = max(arrival_i, e_i) + s_i <= l_i
+            end_service_i = max(arrival_i, e_i - s_i) + s_i <= l_i
         - Vehicle horizon: end time at last node must be <= L_k
         - Capacity (Eq. 12)
         """
@@ -192,7 +194,7 @@ class GraphSearchSolver:
         """
         if not route:
             if self.is_committed:
-                return - self.wC * (self.L_k - self.E_k)
+                return - self.wC * self.shift_length
             else:
                 return 0.0
         
@@ -206,7 +208,7 @@ class GraphSearchSolver:
         # Subtract vehicle costs
         if self.is_committed:
             # Committed driver cost: wC * (L_k - E_k) + deltaC * distance
-            profit -= self.wC * (self.L_k - self.E_k)
+            profit -= self.wC * self.shift_length
             
             # Calculate total distance
             total_dist = self.d_0j.get(route[0], 0)
@@ -463,7 +465,7 @@ class GraphSearchSolver:
         if self.best_route is None:
             # Calculate fixed cost for committed driver even with empty route
             if self.is_committed:
-                self.best_profit = -self.wC * (self.L_k - self.E_k)
+                self.best_profit = -self.wC * self.shift_length
             else:
                 self.best_profit = 0.0
             self.best_route = []

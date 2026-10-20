@@ -55,7 +55,7 @@ class GraphSearchSolver:
             self.cO = instance_data["c_occ_o"]
             self.deltaO = instance_data["c_occ_d"]
         
-        self.rev = instance_data["rev_order"]
+        self.rev = {req["id"]: req["rev"] for req in instance_data["requests"]}   # per-request revenue
         
         # Build coordinates and distance matrices
         self._build_geometry()
@@ -121,6 +121,8 @@ class GraphSearchSolver:
         self.E_k = self.driver["e"]
         self.L_k = self.driver["l"]
         self.Q_k = self.driver["cap"]
+        # Committed block cost is paid on the original shift, even if preprocessing tightened E_k/L_k
+        self.shift_length = self.driver.get("l_orig", self.L_k) - self.driver.get("e_orig", self.E_k)
     
     def _check_feasibility(self, P_tilde, R_tilde, D_tilde):
         """
@@ -129,7 +131,7 @@ class GraphSearchSolver:
 
         Checks (modified):
         - Time windows based on END of service:
-            end_service_i = max(arrival_i, e_i) + s_i <= l_i
+            end_service_i = max(arrival_i, e_i - s_i) + s_i <= l_i
         - Vehicle horizon: end time at last node must be <= L_k
         - Capacity (Eq. 12)
         """
@@ -192,7 +194,7 @@ class GraphSearchSolver:
         """
         if not route:
             if self.is_committed:
-                return - self.wC * (self.L_k - self.E_k)
+                return - self.wC * self.shift_length
             else:
                 return 0.0
         
@@ -201,12 +203,12 @@ class GraphSearchSolver:
         served_pickups = [node for node in route if node in self.P]
         
         for pickup in served_pickups:
-            profit += self.rev - self.u.get(pickup, 0.0)
+            profit += self.rev[pickup] - self.u.get(pickup, 0.0)
         
         # Subtract vehicle costs
         if self.is_committed:
             # Committed driver cost: wC * (L_k - E_k) + deltaC * distance
-            profit -= self.wC * (self.L_k - self.E_k)
+            profit -= self.wC * self.shift_length
             
             # Calculate total distance
             total_dist = self.d_0j.get(route[0], 0)
@@ -398,13 +400,13 @@ class GraphSearchSolver:
         return (earliest_start, urgency_slack, self.e[pickup_id])
 
     def _profit_then_time_key(self, pickup_id):
-        marginal_profit = self.rev - self.u.get(pickup_id, 0.0)
+        marginal_profit = self.rev[pickup_id] - self.u.get(pickup_id, 0.0)
         earliest_arrival = self.E_k + self.d_0j[pickup_id]
         end_service = max(earliest_arrival + self.s[pickup_id], self.e[pickup_id])
         return (-marginal_profit, end_service)  # negate profit so higher profit sorts first
 
     def _time_then_profit_key(self, pickup_id):
-        marginal_profit = self.rev - self.u.get(pickup_id, 0.0)
+        marginal_profit = self.rev[pickup_id] - self.u.get(pickup_id, 0.0)
         earliest_arrival = self.E_k + self.d_0j[pickup_id]
         end_service = max(earliest_arrival + self.s[pickup_id], self.e[pickup_id])
         return (end_service, -marginal_profit)
@@ -423,7 +425,7 @@ class GraphSearchSolver:
         # Reduced gain per request, including the per-order fee for occasional couriers
         # (the same gains the labeling solver uses).
         req_cost = 0.0 if self.is_committed else self.cO
-        gain = {p: self.rev - self.u.get(p, 0.0) - req_cost for p in feasible_pickups}
+        gain = {p: self.rev[p] - self.u.get(p, 0.0) - req_cost for p in feasible_pickups}
 
         # NEW: Dual-based elimination: a request with gain <= 0 never improves a route (removing
         # it never adds travel or delays later stops, by the triangle inequality), so some optimal
@@ -463,7 +465,7 @@ class GraphSearchSolver:
         if self.best_route is None:
             # Calculate fixed cost for committed driver even with empty route
             if self.is_committed:
-                self.best_profit = -self.wC * (self.L_k - self.E_k)
+                self.best_profit = -self.wC * self.shift_length
             else:
                 self.best_profit = 0.0
             self.best_route = []

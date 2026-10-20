@@ -96,7 +96,7 @@ def solve_instance_comparison(instance_path: str,
     Lk = {d["id"]: d["l"] for d in instance["committed"]} | {d["id"]: d["l"] for d in instance["occasional"]}
     Qk = {d["id"]: d["cap"] for d in instance["committed"]} | {d["id"]: d["cap"] for d in instance["occasional"]}
     
-    p = {i: instance["rev_order"] for i in P}
+    p = {req["id"]: req["rev"] for req in instance["requests"]}   # per-request revenue
     
     wC = instance["c_com_h"] / b
     cO = instance["c_occ_o"]
@@ -107,8 +107,8 @@ def solve_instance_comparison(instance_path: str,
     # This takes care of courier-request combos that are infeasible    
     z_UB = {
         (pickup, driver): (
-            1 if (li[pickup] - si[pickup] >= max(dijk[0, pickup, driver] + Ek[driver], ei[pickup])
-                  and Lk[driver] >= ei[pickup + num_requests] + si[pickup + num_requests]) else 0
+            1 if (li[pickup] - si[pickup] >= max(dijk[0, pickup, driver] + Ek[driver], ei[pickup] - si[pickup])
+                  and Lk[driver] >= ei[pickup + num_requests]) else 0
         )
         for driver in K for pickup in P
     }
@@ -145,7 +145,7 @@ def solve_instance_comparison(instance_path: str,
             m.Params.TimeLimit = timeLimit
         
         x = m.addVars(A, K, vtype=GRB.CONTINUOUS, name="x")
-        Lvar = m.addVars(A2, K, vtype=GRB.CONTINUOUS, name="L")
+        Lvar = m.addVars(A2, vtype=GRB.CONTINUOUS, name="L")
         y = m.addVars(P + D, K, vtype=GRB.CONTINUOUS, name="y")
         T = m.addVars(P + D + [0, 2 * n + 1], K, vtype=GRB.CONTINUOUS, lb=0, name="T")
         
@@ -243,16 +243,17 @@ def solve_instance_comparison(instance_path: str,
             m.addConstr(Ek[k] * gp.quicksum(x[0, i, k] for i in P if (i, k) in PK) <= T[0, k])
             m.addConstr(T[2 * n + 1, k] <= Lk[k] * gp.quicksum(x[0, i, k] for i in P if (i, k) in PK))
         
-        for k in K:
-            for i in P + D:
-                m.addConstr(
-                    gp.quicksum(Lvar[i, j, k] for j in P + D if (i, j) in A2) -
-                    gp.quicksum(Lvar[j, i, k] for j in P + D if (j, i) in A2)
-                    == dem[i] * gp.quicksum(x[i, j, k] for j in V if (i, j) in A)
-                )
-            for (i, j) in A2:
-                m.addConstr(Lvar[i, j, k] >= max(dem[i], 0) * x[i, j, k])
-                m.addConstr(Lvar[i, j, k] <= (Qk[k] + min(dem[i], 0)) * x[i, j, k])
+        # Load flow with one load variable per arc, shared by all couriers (each arc is used by at
+        # most one courier, so the sums over k pick the capacity of whichever courier uses it).
+        for i in P + D:
+            m.addConstr(
+                gp.quicksum(Lvar[i, j] for j in P + D if (i, j) in A2) -
+                gp.quicksum(Lvar[j, i] for j in P + D if (j, i) in A2)
+                == dem[i] * gp.quicksum(x[i, j, k] for k in K for j in V if (i, j) in A)
+            )
+        for (i, j) in A2:
+            m.addConstr(Lvar[i, j] >= gp.quicksum(max(dem[i], 0) * x[i, j, k] for k in K))
+            m.addConstr(Lvar[i, j] <= gp.quicksum((Qk[k] + min(dem[i], 0)) * x[i, j, k] for k in K))
         
         return m
     

@@ -75,6 +75,7 @@ PRICING_LABELING    = "labeling"     # ESPPRC labeling with dominance (labeling.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from instance_loader import load_instance_from_txt
+from preprocessing import preprocess_instance
 from graph_search import GraphSearchSolver
 from labeling import LabelingSolver
 
@@ -115,7 +116,9 @@ class Column:
 # Precompute all instance-level data that stays fixed across nodes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _precompute(instance):
+def _precompute(instance, prep):
+    """Instance-level data fixed across nodes. `instance` is the preprocessed instance
+    (prep["instance"]); elimination results come from prep (preprocessing.preprocess_instance)."""
     n = len(instance["requests"])
     P = list(range(1, n + 1))
     D = [i + n for i in P]
@@ -144,34 +147,9 @@ def _precompute(instance):
     dij = {(i, j): math.dist(coords[i], coords[j]) for (i, j) in A2_full}
     dijk = {(0, j, k): math.dist(ok[k], coords[j]) for j in P for k in K}
 
-    # Feasibility filters
-    z_UB = {}
+    # Courier-request (z_UB) and arc (x_UB, x_ind) elimination, shared with the exact MIP
+    z_UB, x_UB, x_ind = prep["z_UB"], prep["x_UB"], prep["x_ind"]
     all_couriers = instance["committed"] + instance["occasional"]
-    for k in K:
-        drv = all_couriers[k]
-        for p in P:
-            ok_time = (li[p] - si[p] >= max(dijk[0, p, k] + drv["e"], ei[p])
-                       and drv["l"] >= ei[p + n] + si[p + n])
-            z_UB[p, k] = 1 if ok_time else 0
-
-    x_UB = {
-        (i, j): 0 if (ei[i] + dij[i, j] + si[j] > li[j])
-                     or (i in set(D) and j == i - n)
-                else 1
-        for (i, j) in A2_full
-    }
-    UBxIPC1 = {
-        (n2, d2): 0 if (d2 in set(D) and d2 - n != n2
-                        and x_UB.get((d2 - n, n2), 0) == 0) else 1
-        for (n2, d2) in A2_full
-    }
-    UBxIPC2 = {
-        (p2, n2): 0 if (p2 in set(P) and p2 + n != n2
-                        and x_UB.get((n2, p2 + n), 0) == 0) else 1
-        for (p2, n2) in A2_full
-    }
-    x_ind = {(i, j): x_UB[i, j] * UBxIPC1[i, j] * UBxIPC2[i, j]
-             for (i, j) in A2_full}
 
     return dict(n=n, P=P, D=D, KC=KC, KO=KO, K=K,
                 coords=coords, z_UB=z_UB, x_UB=x_UB, x_ind=x_ind,
@@ -244,7 +222,8 @@ def _make_empty_columns(instance, precomp):
     for k in precomp["K"]:
         drv = precomp["all_couriers"][k]
         if k in precomp["KC"]:
-            profit = -wC * (drv["l"] - drv["e"])
+            # block cost on the original shift, even if preprocessing tightened the window
+            profit = -wC * (drv.get("l_orig", drv["l"]) - drv.get("e_orig", drv["e"]))
         else:
             profit = 0.0
         cols.append(Column(k=k, requests=[], route=[],
@@ -597,7 +576,8 @@ def solve_instance_bnp(instance_path,
                        add_all_columns=DEFAULT_ADD_ALL_COLUMNS,
                        pricing_algo=DEFAULT_PRICING_ALGO,
                        gap_tol=0.0,
-                       verbose=True):
+                       verbose=True,
+                       tighten=False):
     """
     Branch and Price solver for SPDPTW with two courier types.
 
@@ -610,6 +590,8 @@ def solve_instance_bnp(instance_path,
                        incumbents then come only from integral LP solutions)
     pricing_algo     : pricing solver, PRICING_GRAPHSEARCH or PRICING_LABELING
     gap_tol          : stop early when gap ≤ gap_tol  (0.0 = proven optimality)
+    tighten          : tighten time windows in preprocessing (preprocessing.preprocess_instance,
+                       shared with solve_exact_mip); its time is prep_time, not in total_time
 
     Returns
     -------
@@ -624,20 +606,23 @@ def solve_instance_bnp(instance_path,
       total_time (s)
       status_msg
       routes        — dict {courier_k: [node_sequence]} for best solution
+      prep_time, prep_stats — preprocessing time and statistics
     """
     if pricing_algo not in _PRICING_SOLVERS:
         raise ValueError(f"Unknown pricing_algo {pricing_algo!r}; "
                          f"expected one of {sorted(_PRICING_SOLVERS)}")
-
-    t_start = time.time()
 
     if verbose:
         print(f"\n{'='*65}")
         print(f"Branch and Price: {os.path.basename(instance_path)}  (pricing: {pricing_algo})")
         print(f"{'='*65}")
 
-    instance = load_instance_from_txt(instance_path)
-    precomp  = _precompute(instance)
+    # Shared preprocessing (elimination, plus time-window tightening when tighten=True); its time
+    # is reported separately as prep_time and is not part of total_time
+    prep     = preprocess_instance(load_instance_from_txt(instance_path), tighten=tighten)
+    instance = prep["instance"]
+    t_start  = time.time()
+    precomp  = _precompute(instance, prep)
     P, K, KC, KO = precomp["P"], precomp["K"], precomp["KC"], precomp["KO"]
     n = precomp["n"]
 
@@ -698,7 +683,8 @@ def solve_instance_bnp(instance_path,
             print("[Root] LP infeasible — problem has no feasible solution.")
         return dict(best_primal=None, lp_root_bound=None,
                     best_gap=None, n_nodes=0, n_cols_root=0,
-                    total_time=elapsed, status_msg="INFEASIBLE", routes=None)
+                    total_time=elapsed, status_msg="INFEASIBLE", routes=None,
+                    prep_time=prep["stats"]["prep_time"], prep_stats=prep["stats"])
 
     lp_obj, cols_root, pi, mu, lambda_vals, rmp_root, cg_iters, n_new, cg_t = root_result
     lp_root_bound    = lp_obj
@@ -921,6 +907,8 @@ def solve_instance_bnp(instance_path,
         time_to_best=time_to_best,
         status_msg=status,
         routes=best_routes,
+        prep_time=prep["stats"]["prep_time"],
+        prep_stats=prep["stats"],
     )
 
 
